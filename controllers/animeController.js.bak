@@ -1,0 +1,383 @@
+// @ts-nocheck
+const { pool } = require('../config/database');
+
+// Get all animes with tags and studios
+const getAllAnimes = async (req, res) => {
+    try {
+        const { cimke, statusz, search, limit = 50, offset = 0, lathatosag = 1 } = req.query;
+
+        // Base query with LEFT JOINs to get tags and studios
+        let query = `
+            SELECT 
+                a.*,
+                GROUP_CONCAT(DISTINCT c.cimke_nev ORDER BY c.cimke_nev SEPARATOR ', ') AS cimkek,
+                GROUP_CONCAT(DISTINCT s.studio_nev ORDER BY s.studio_nev SEPARATOR ', ') AS studiok
+            FROM anime_adatlap a
+            LEFT JOIN anime_cimke ac ON a.id = ac.anime_id
+            LEFT JOIN cimke_lista c ON ac.cimke_id = c.id
+            LEFT JOIN anime_studio ast ON a.id = ast.anime_id
+            LEFT JOIN studio_lista s ON ast.studio_id = s.id
+            WHERE a.lathatosag = ?
+        `;
+        const params = [parseInt(lathatosag)];
+
+        // Filter by tag/genre
+        if (cimke) {
+            query += ` AND a.id IN (
+                SELECT ac2.anime_id FROM anime_cimke ac2
+                JOIN cimke_lista c2 ON ac2.cimke_id = c2.id
+                WHERE c2.cimke_nev LIKE ?
+            )`;
+            params.push(`%${cimke}%`);
+        }
+
+        // Filter by status
+        if (statusz) {
+            query += ' AND a.statusz = ?';
+            params.push(statusz);
+        }
+
+        // Search in title
+        if (search) {
+            query += ' AND (a.japan_cim LIKE ? OR a.angol_cim LIKE ?)';
+            params.push(`%${search}%`, `%${search}%`);
+        }
+
+        // Group by anime ID and order by rating
+        query += ` 
+            GROUP BY a.id 
+            ORDER BY a.ertekeles DESC
+            LIMIT ? OFFSET ?
+        `;
+        params.push(parseInt(limit), parseInt(offset));
+
+        const [rows] = await pool.query(query, params);
+
+        res.json({
+            success: true,
+            count: rows.length,
+            data: rows
+        });
+    } catch (error) {
+        console.error('Error fetching animes:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch animes'
+        });
+    }
+};
+
+// Get single anime with tags, studios, and episodes
+const getAnimeById = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Get anime details with tags and studios
+        const [animeRows] = await pool.query(`
+        SELECT
+        a.*,
+            GROUP_CONCAT(DISTINCT c.cimke_nev ORDER BY c.cimke_nev SEPARATOR ', ') AS cimkek,
+                GROUP_CONCAT(DISTINCT s.studio_nev ORDER BY s.studio_nev SEPARATOR ', ') AS studiok
+            FROM anime_adatlap a
+            LEFT JOIN anime_cimke ac ON a.id = ac.anime_id
+            LEFT JOIN cimke_lista c ON ac.cimke_id = c.id
+            LEFT JOIN anime_studio ast ON a.id = ast.anime_id
+            LEFT JOIN studio_lista s ON ast.studio_id = s.id
+            WHERE a.id = ?
+            GROUP BY a.id
+                `, [id]);
+
+        if (animeRows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Anime not found'
+            });
+        }
+
+        // Get episodes for this anime
+        const [episodes] = await pool.query(`
+            SELECT id, sorrend, resz, lathatosag
+            FROM reszek
+            WHERE anime_id = ? AND lathatosag = 1
+            ORDER BY sorrend ASC
+        `, [id]);
+
+        const anime = animeRows[0];
+        anime.reszek = episodes;
+
+        res.json({
+            success: true,
+            data: anime
+        });
+    } catch (error) {
+        console.error('Error fetching anime:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch anime',
+            details: error.message
+        });
+    }
+};
+
+// Create new anime with tags and studios
+const createAnime = async (req, res) => {
+    const connection = await pool.getConnection();
+
+    try {
+        await connection.beginTransaction();
+
+        const {
+            japan_cim,
+            angol_cim,
+            borito,
+            hatter,
+            ertekeles = 0.0,
+            cimkek = [], // Array of tag names
+            studiok = [], // Array of studio names
+            mal_link,
+            leiras,
+            statusz = 'Hamarosan',
+            tipus = 'TV',
+            osszes_epizod,
+            jelenlegi_epizod,
+            megjelenes,
+            szezon,
+            keszito,
+            besorolas = 'Besorolás alatt',
+            trailer,
+            lathatosag = 1
+        } = req.body;
+
+        // Insert anime
+        const [result] = await connection.query(
+            `INSERT INTO anime_adatlap(
+                    japan_cim, angol_cim, borito, hatter, ertekeles, mal_link,
+                    leiras, statusz, tipus, osszes_epizod, jelenlegi_epizod,
+                    megjelenes, szezon, keszito, besorolas, trailer, lathatosag, feltoltes_ido
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE())`,
+            [
+                japan_cim, angol_cim, borito, hatter, ertekeles, mal_link,
+                leiras, statusz, tipus, osszes_epizod, jelenlegi_epizod,
+                megjelenes, szezon, keszito, besorolas, trailer, lathatosag
+            ]
+        );
+
+        const animeId = result.insertId;
+
+        // Handle tags/genres
+        if (Array.isArray(cimkek) && cimkek.length > 0) {
+            for (const cimke of cimkek) {
+                // Insert tag if not exists
+                await connection.query(
+                    `INSERT IGNORE INTO cimke_lista(cimke_nev) VALUES(?)`,
+                    [cimke]
+                );
+
+                // Get tag ID
+                const connection = await pool.getConnection();
+
+                try {
+                    await connection.beginTransaction();
+
+                    const { id } = req.params;
+                    const { cimkek, studiok, ...animeData } = req.body;
+
+                    // Check if anime exists
+                    const [exists] = await connection.query(
+                        'SELECT id FROM anime_adatlap WHERE id = ?',
+                        [id]
+                    );
+
+                    if (exists.length === 0) {
+                        await connection.rollback();
+                        return res.status(404).json({
+                            success: false,
+                            error: 'Anime not found'
+                        });
+                    }
+
+                    // Update anime data if provided
+                    if (Object.keys(animeData).length > 0) {
+                        const fields = Object.keys(animeData);
+                        const values = Object.values(animeData);
+
+                        const setClause = fields.map(field => `${field} = ?`).join(', ');
+                        const query = `UPDATE anime_adatlap SET ${setClause} WHERE id = ? `;
+
+                        await connection.query(query, [...values, id]);
+                    }
+
+                    // Update tags if provided
+                    if (Array.isArray(cimkek)) {
+                        // Remove existing tags
+                        await connection.query('DELETE FROM anime_cimke WHERE anime_id = ?', [id]);
+
+                        // Add new tags
+                        for (const cimke of cimkek) {
+                            await connection.query(
+                                `INSERT IGNORE INTO cimke_lista(cimke_nev) VALUES(?)`,
+                                [cimke]
+                            );
+
+                            const [tagRows] = await connection.query(
+                                `SELECT id FROM cimke_lista WHERE cimke_nev = ? `,
+                                [cimke]
+                            );
+
+                            await connection.query(
+                                `INSERT INTO anime_cimke(anime_id, cimke_id) VALUES(?, ?)`,
+                                [id, tagRows[0].id]
+                            );
+                        }
+                    }
+
+                    // Update studios if provided
+                    if (Array.isArray(studiok)) {
+                        // Remove existing studios
+                        await connection.query('DELETE FROM anime_studio WHERE anime_id = ?', [id]);
+
+                        // Add new studios
+                        for (const studio of studiok) {
+                            await connection.query(
+                                `INSERT IGNORE INTO studio_lista(studio_nev) VALUES(?)`,
+                                [studio]
+                            );
+
+                            const [studioRows] = await connection.query(
+                                `SELECT id FROM studio_lista WHERE studio_nev = ? `,
+                                [studio]
+                            );
+
+                            await connection.query(
+                                `INSERT INTO anime_studio(anime_id, studio_id) VALUES(?, ?)`,
+                                [id, studioRows[0].id]
+                            );
+                        }
+                    }
+
+                    await connection.commit();
+
+                    res.json({
+                        success: true,
+                        data: {
+                            message: 'Anime updated successfully'
+                        }
+                    });
+                } catch (error) {
+                    await connection.rollback();
+                    console.error('Error updating anime:', error);
+                    res.status(500).json({
+                        success: false,
+                        error: 'Failed to update anime',
+                        details: error.message
+                    });
+                } finally {
+                    connection.release(es.status(201).json({
+                        success: true,
+                        data: {
+                            id: animeId,
+                (CASCADE will handle related records)
+const deleteAnime = async (req, res) => {
+                            try {
+                                const { id } = req.params;
+
+                                const [result] = await pool.query(
+                                    'DELETE FROM anime_adatlap WHERE id = ?',
+                                    [id]
+                                );
+
+                                if (result.affectedRows === 0) {
+                                    return res.status(404).json({
+                                        success: false,
+                                        error: 'Anime not found'
+                                    });
+                                }
+
+                                res.json({
+                                    success: true,
+                                    data: {
+                                        message: 'Anime deleted successfully (including all related data)'
+                                    }
+                                });
+                            } catch (error) {
+                                console.error('Error deleting anime:', error);
+                                res.status(500).json({
+                                    success: false,
+                                    error: 'Failed to delete anime',
+                                    details: error.message
+                                });
+                            }
+                        };
+                        if(fields.length === 0) {
+                        return res.status(400).json({
+                            success: false,
+                            error: 'No fields to update'
+                        });
+                    }
+
+        const setClause = fields.map(field => `${field} = ?`).join(', ');
+                    const query = `UPDATE animes SET ${setClause} WHERE id = ? `;
+
+                    const [result] = await pool.query(query, [...values, id]);
+
+                    if (result.affectedRows === 0) {
+                        return res.status(404).json({
+                            success: false,
+                            error: 'Anime not found'
+                        });
+                    }
+
+                    res.json({
+                        success: true,
+                        data: {
+                            message: 'Anime updated successfully'
+                        }
+                    });
+                } catch (error) {
+                    console.error('Error updating anime:', error);
+                    res.status(500).json({
+                        success: false,
+                        error: 'Failed to update anime'
+                    });
+                }
+            };
+
+            // Delete anime
+            const deleteAnime = async (req, res) => {
+                try {
+                    const { id } = req.params;
+
+                    const [result] = await pool.query(
+                        'DELETE FROM animes WHERE id = ?',
+                        [id]
+                    );
+
+                    if (result.affectedRows === 0) {
+                        return res.status(404).json({
+                            success: false,
+                            error: 'Anime not found'
+                        });
+                    }
+
+                    res.json({
+                        success: true,
+                        data: {
+                            message: 'Anime deleted successfully'
+                        }
+                    });
+                } catch (error) {
+                    console.error('Error deleting anime:', error);
+                    res.status(500).json({
+                        success: false,
+                        error: 'Failed to delete anime'
+                    });
+                }
+            };
+
+            module.exports = {
+                getAllAnimes,
+                getAnimeById,
+                createAnime,
+                updateAnime,
+                deleteAnime
+            };
