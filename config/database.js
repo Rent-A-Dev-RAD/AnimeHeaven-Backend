@@ -16,14 +16,18 @@ const pool = mysql.createPool({
 // Get promise-based pool
 const promisePool = pool.promise();
 
-// Test connection
-const testConnection = async () => {
+// Test connection (silent mode for health checks)
+const testConnection = async (silent = false) => {
     try {
         const [rows] = await promisePool.query('SELECT 1');
-        console.log('✅ Database connected successfully');
+        if (!silent) {
+            console.log('✅ Database connected successfully');
+        }
         return true;
     } catch (error) {
-        console.error('❌ Database connection failed:', error.message);
+        if (!silent) {
+            console.error('❌ Database connection failed:', error.message);
+        }
         return false;
     }
 };
