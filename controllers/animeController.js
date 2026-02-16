@@ -1,378 +1,533 @@
-// @ts-nocheck
-const { pool } = require('../config/database');
+const { Op } = require('sequelize');
+const { sequelize, anime_adatlap, reszek, cimke_lista, studio_lista, anime_cimke, anime_studio } = require('../models');
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     Anime:
+ *       type: object
+ *       properties:
+ *         id:
+ *           type: integer
+ *           example: 1
+ *         cim:
+ *           type: string
+ *           example: "Attack on Titan"
+ *         statusz:
+ *           type: string
+ *           example: "folyamatban"
+ *         cimkek:
+ *           type: array
+ *           items:
+ *             type: string
+ *           example: ["akció", "dráma"]
+ *       required:
+ *         - id
+ *         - cim
+ */
 
-// Get all animes with tags and studios
+/**
+ * @swagger
+ * /api/animes:
+ *   get:
+ *     summary: Összes anime lekérése
+ *     tags: [Animes]
+ *     responses:
+ *       200:
+ *         description: Sikeres lekérdezés
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   items:
+ *                     $ref: '#/components/schemas/Anime'
+ *       500:
+ *         description: Server hiba
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 const getAllAnimes = async (req, res) => {
     try {
-        const { cimke, statusz, search, limit = 50, offset = 0, lathatosag = 1 } = req.query;
+        // Csak a lapozást hagyjuk meg, hogy ne omoljon össze a szerver 1 millió rekordnál
+        const { limit = 50, offset = 0 } = req.query;
 
-        // Base query with LEFT JOINs to get tags and studios
-        let query = `
-            SELECT 
-                a.*,
-                GROUP_CONCAT(DISTINCT c.cimke_nev ORDER BY c.cimke_nev SEPARATOR ', ') AS cimkek,
-                GROUP_CONCAT(DISTINCT s.studio_nev ORDER BY s.studio_nev SEPARATOR ', ') AS studiok
-            FROM anime_adatlap a
-            LEFT JOIN anime_cimke ac ON a.id = ac.anime_id
-            LEFT JOIN cimke_lista c ON ac.cimke_id = c.id
-            LEFT JOIN anime_studio ast ON a.id = ast.anime_id
-            LEFT JOIN studio_lista s ON ast.studio_id = s.id
-            WHERE a.lathatosag = ?
-        `;
-        const params = [parseInt(lathatosag)];
-
-        // Filter by tag/genre
-        if (cimke) {
-            query += ` AND a.id IN (
-                SELECT ac2.anime_id FROM anime_cimke ac2
-                JOIN cimke_lista c2 ON ac2.cimke_id = c2.id
-                WHERE c2.cimke_nev LIKE ?
-            )`;
-            params.push(`%${cimke}%`);
-        }
-
-        // Filter by status
-        if (statusz) {
-            query += ' AND a.statusz = ?';
-            params.push(statusz);
-        }
-
-        // Search in title
-        if (search) {
-            query += ' AND (a.japan_cim LIKE ? OR a.angol_cim LIKE ?)';
-            params.push(`%${search}%`, `%${search}%`);
-        }
-
-        // Group by anime ID and order by rating
-        query += ` 
-            GROUP BY a.id 
-            ORDER BY a.ertekeles DESC
-            LIMIT ? OFFSET ?
-        `;
-        params.push(parseInt(limit), parseInt(offset));
-
-        const [rows] = await pool.query(query, params);
-
-        res.json({
-            success: true,
-            count: rows.length,
-            data: rows
+        const animes = await anime_adatlap.findAll({
+            limit: parseInt(limit),
+            offset: parseInt(offset),
+            order: [['ertekeles', 'DESC']], // Legjobbak elöl
+            include: [
+                {
+                    model: anime_cimke,
+                    as: 'anime_cimkes',
+                    include: [{
+                        model: cimke_lista,
+                        as: 'cimke'
+                    }]
+                },
+                {
+                    model: anime_studio,
+                    as: 'anime_studios',
+                    include: [{
+                        model: studio_lista,
+                        as: 'studio'
+                    }]
+                }
+            ]
         });
+
+        res.json({ 
+            success: true, 
+            count: animes.length, 
+            data: animes 
+        });
+
     } catch (error) {
-        console.error('Error fetching animes:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to fetch animes'
+        console.error("Lekérdezési hiba:", error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Hiba a lekérdezés során',
+            details: error.message 
         });
     }
 };
-
-// Get single anime with tags, studios, and episodes
+/**
+ * @swagger
+ * /api/animes/{id}:
+ *   get:
+ *     summary: Egy anime lekérése ID alapján
+ *     tags: [Animes]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *         description: Az anime egyedi azonosítója
+ *         example: 1
+ *     responses:
+ *       200:
+ *         description: Sikeres lekérdezés!
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Anime'
+ *       404:
+ *         description: Anime nem található
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Anime not found with id: 999"
+ *       400:
+ *         description: Érvénytelen ID formátum
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Invalid ID format"
+ */
 const getAnimeById = async (req, res) => {
     try {
         const { id } = req.params;
+        const anime = await anime_adatlap.findByPk(id, {
+            include: [
+                {
+                    model: anime_cimke,
+                    as: 'anime_cimkes',
+                    include: [{
+                        model: cimke_lista,
+                        as: 'cimke'
+                    }]
+                },
+                {
+                    model: anime_studio,
+                    as: 'anime_studios',
+                    include: [{
+                        model: studio_lista,
+                        as: 'studio'
+                    }]
+                }
+            ]
+        });
 
-        // Get anime details with tags and studios
-        const [animeRows] = await pool.query(`
-            SELECT 
-                a.*,
-                GROUP_CONCAT(DISTINCT c.cimke_nev ORDER BY c.cimke_nev SEPARATOR ', ') AS cimkek,
-                GROUP_CONCAT(DISTINCT s.studio_nev ORDER BY s.studio_nev SEPARATOR ', ') AS studiok
-            FROM anime_adatlap a
-            LEFT JOIN anime_cimke ac ON a.id = ac.anime_id
-            LEFT JOIN cimke_lista c ON ac.cimke_id = c.id
-            LEFT JOIN anime_studio ast ON a.id = ast.anime_id
-            LEFT JOIN studio_lista s ON ast.studio_id = s.id
-            WHERE a.id = ?
-            GROUP BY a.id
-        `, [id]);
-
-        if (animeRows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                error: 'Anime not found'
-            });
+        if (!anime) {
+            return res.status(404).json({ success: false, message: 'Anime nem található' });
         }
 
-        // Get episodes for this anime
-        const [episodes] = await pool.query(`
-            SELECT id, sorrend, resz, lathatosag
-            FROM reszek
-            WHERE anime_id = ? AND lathatosag = 1
-            ORDER BY sorrend ASC
-        `, [id]);
-
-        const anime = animeRows[0];
-        anime.reszek = episodes;
-
-        res.json({
-            success: true,
-            data: anime
-        });
+        res.json({ success: true, data: anime });
     } catch (error) {
-        console.error('Error fetching anime:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to fetch anime',
-            details: error.message
-        });
+        console.error(error);
+        res.status(500).json({ success: false, error: error.message });
     }
 };
-
-// Create new anime with tags and studios
+/**
+ * @swagger
+ * /api/animes:
+ *   post:
+ *     summary: Új anime hozzáadása
+ *     tags: [Animes]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - japan_cim
+ *             properties:
+ *               japan_cim:
+ *                 type: string
+ *                 description: Japán cím
+ *                 example: "進撃の巨人"
+ *               angol_cim:
+ *                 type: string
+ *                 description: Angol cím
+ *                 example: "Attack on Titan"
+ *               cimkek:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Anime címkék/műfajok
+ *                 example: ["akció", "dráma", "fantasy"]
+ *               studiok:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Animációs stúdiók
+ *                 example: ["Wit Studio", "MAPPA"]
+ *               leiras:
+ *                 type: string
+ *                 description: Anime leírása
+ *                 example: "Az emberiség utolsó reménysége..."
+ *               statusz:
+ *                 type: string
+ *                 enum: [folyamatban, befejezett, szunetel]
+ *                 default: folyamatban
+ *                 description: Anime státusza
+ *               evad:
+ *                 type: integer
+ *                 minimum: 2000
+ *                 maximum: 2024
+ *                 description: Megjelenés éve
+ *                 example: 2013
+ *     responses:
+ *       201:
+ *         description: Anime sikeresen létrehozva
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Anime'
+ *       400:
+ *         description: Érvénytelen adatok
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       409:
+ *         description: Már létezik ilyen anime
+ */
 const createAnime = async (req, res) => {
-    const connection = await pool.getConnection();
-
     try {
-        await connection.beginTransaction();
+        const { japan_cim, angol_cim, leiras, statusz, cimkek, studiok } = req.body;
 
-        const {
+        // 1. Létrehozzuk az alap Anime rekordot
+        const newAnime = await anime_adatlap.create({
             japan_cim,
             angol_cim,
-            borito,
-            hatter,
-            ertekeles = 0.0,
-            cimkek = [], // Array of tag names
-            studiok = [], // Array of studio names
-            mal_link,
             leiras,
-            statusz = 'Hamarosan',
-            tipus = 'TV',
-            osszes_epizod,
-            jelenlegi_epizod,
-            megjelenes,
-            szezon,
-            keszito,
-            besorolas = 'Besorolás alatt',
-            trailer,
-            lathatosag = 1
-        } = req.body;
+            statusz,
+            lathatosag: 1 // Alapértelmezett érték
+        });
 
-        // Insert anime
-        const [result] = await connection.query(
-            `INSERT INTO anime_adatlap(
-                    japan_cim, angol_cim, borito, hatter, ertekeles, mal_link,
-                    leiras, statusz, tipus, osszes_epizod, jelenlegi_epizod,
-                    megjelenes, szezon, keszito, besorolas, trailer, lathatosag, feltoltes_ido
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE())`,
-            [
-                japan_cim, angol_cim, borito, hatter, ertekeles, mal_link,
-                leiras, statusz, tipus, osszes_epizod, jelenlegi_epizod,
-                megjelenes, szezon, keszito, besorolas, trailer, lathatosag
-            ]
-        );
-
-        const animeId = result.insertId;
-
-        // Handle tags/genres
-        if (Array.isArray(cimkek) && cimkek.length > 0) {
-            for (const cimke of cimkek) {
-                // Insert tag if not exists
-                await connection.query(
-                    `INSERT IGNORE INTO cimke_lista(cimke_nev) VALUES(?)`,
-                    [cimke]
-                );
-
-                // Get tag ID
-                const [tagRows] = await connection.query(
-                    `SELECT id FROM cimke_lista WHERE cimke_nev = ?`,
-                    [cimke]
-                );
-
-                // Link anime to tag
-                await connection.query(
-                    `INSERT INTO anime_cimke(anime_id, cimke_id) VALUES(?, ?)`,
-                    [animeId, tagRows[0].id]
-                );
+        // 2. Címkék összekötése (ha vannak)
+        if (cimkek && cimkek.length > 0) {
+            for (const cimkeNev of cimkek) {
+                // Megkeressük vagy létrehozzuk a címkét a listában
+                const [cimkeRecord] = await cimke_lista.findOrCreate({
+                    where: { cimke_nev: cimkeNev }
+                });
+                
+                // Manuálisan mentünk a KAPCSOLÓTÁBLÁBA
+                await anime_cimke.create({
+                    anime_id: newAnime.id,
+                    cimke_id: cimkeRecord.id
+                });
             }
         }
 
-        // Handle studios
-        if (Array.isArray(studiok) && studiok.length > 0) {
-            for (const studio of studiok) {
-                // Insert studio if not exists
-                await connection.query(
-                    `INSERT IGNORE INTO studio_lista(studio_nev) VALUES(?)`,
-                    [studio]
-                );
+        // 3. Stúdiók összekötése (ha vannak)
+        if (studiok && studiok.length > 0) {
+            for (const studioNev of studiok) {
+                const [studioRecord] = await studio_lista.findOrCreate({
+                    where: { studio_nev: studioNev }
+                });
 
-                // Get studio ID
-                const [studioRows] = await connection.query(
-                    `SELECT id FROM studio_lista WHERE studio_nev = ?`,
-                    [studio]
-                );
-
-                // Link anime to studio
-                await connection.query(
-                    `INSERT INTO anime_studio(anime_id, studio_id) VALUES(?, ?)`,
-                    [animeId, studioRows[0].id]
-                );
+                await anime_studio.create({
+                    anime_id: newAnime.id,
+                    studio_id: studioRecord.id
+                });
             }
         }
-
-        await connection.commit();
 
         res.status(201).json({
             success: true,
-            data: {
-                id: animeId,
-                message: 'Anime created successfully'
-            }
+            message: "Anime sikeresen létrehozva!",
+            data: newAnime
         });
+
     } catch (error) {
-        await connection.rollback();
-        console.error('Error creating anime:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to create anime',
-            details: error.message
-        });
-    } finally {
-        connection.release();
+        console.error("POST Hiba:", error);
+        res.status(500).json({ success: false, error: error.message });
     }
 };
-
-// Update anime with tags and studios
+/**
+ * @swagger
+ * /api/animes/{id}:
+ *   put:
+ *     summary: Anime teljes adatainak frissítése
+ *     tags: [Animes]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: A frissítendő anime azonosítója
+ *         example: 1
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - japan_cim
+ *               - angol_cim
+ *               - leiras
+ *             properties:
+ *               japan_cim:
+ *                 type: string
+ *                 description: Japán cím
+ *                 example: "進撃の巨人"
+ *               angol_cim:
+ *                 type: string
+ *                 description: Angol cím
+ *                 example: "Attack on Titan"
+ *               leiras:
+ *                 type: string
+ *                 description: Anime leírása
+ *                 example: "Az emberiség utolsó városában az óriások elleni küzdelem..."
+ *               cimkek:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Műfajok/címkék
+ *                 example: ["akció", "dráma", "fantasy"]
+ *               studiok:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Gyártó stúdiók
+ *                 example: ["Wit Studio", "MAPPA"]
+ *               statusz:
+ *                 type: string
+ *                 enum: [folyamatban, befejezett, szunetel]
+ *                 description: Anime státusza
+ *                 example: "befejezett"
+ *               evad:
+ *                 type: integer
+ *                 description: Megjelenés éve
+ *                 example: 2013
+ *     responses:
+ *       200:
+ *         description: Anime sikeresen frissítve
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id:
+ *                   type: integer
+ *                   example: 1
+ *                 japan_cim:
+ *                   type: string
+ *                   example: "進撃の巨人"
+ *                 angol_cim:
+ *                   type: string
+ *                   example: "Attack on Titan"
+ *                 leiras:
+ *                   type: string
+ *                 cimkek:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 studiok:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 statusz:
+ *                   type: string
+ *                 evad:
+ *                   type: integer
+ *                 frissitve:
+ *                   type: string
+ *                   format: date-time
+ *                   example: "2024-01-15T10:30:00Z"
+ *       400:
+ *         description: Érvénytelen adatok vagy hiányzó kötelező mezők
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "japan_cim is required"
+ *                 statusCode:
+ *                   type: integer
+ *                   example: 400
+ *       404:
+ *         description: Anime nem található
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Anime not found with id: 99"
+ *                 statusCode:
+ *                   type: integer
+ *                   example: 404
+ *       500:
+ *         description: Szerverhiba
+ */
 const updateAnime = async (req, res) => {
-    const connection = await pool.getConnection();
-
     try {
-        await connection.beginTransaction();
-
         const { id } = req.params;
-        const { cimkek, studiok, ...animeData } = req.body;
+        const { japan_cim, angol_cim, leiras, statusz, cimkek, studiok } = req.body;
 
-        // Check if anime exists
-        const [exists] = await connection.query(
-            'SELECT id FROM anime_adatlap WHERE id = ?',
-            [id]
-        );
-
-        if (exists.length === 0) {
-            await connection.rollback();
-            return res.status(404).json({
-                success: false,
-                error: 'Anime not found'
-            });
+        // 1. Megkeressük az animét
+        const anime = await anime_adatlap.findByPk(id);
+        if (!anime) {
+            return res.status(404).json({ success: false, message: 'Anime nem található' });
         }
 
-        // Update anime data if provided
-        if (Object.keys(animeData).length > 0) {
-            const fields = Object.keys(animeData);
-            const values = Object.values(animeData);
+        // 2. Alapadatok frissítése
+        await anime.update({ japan_cim, angol_cim, leiras, statusz });
 
-            const setClause = fields.map(field => `${field} = ?`).join(', ');
-            const query = `UPDATE anime_adatlap SET ${setClause} WHERE id = ?`;
+        // 3. Címkék frissítése (Töröljük a régieket, és hozzáadjuk az újakat)
+        if (cimkek) {
+            // Régi kapcsolatok törlése ehhez az animéhez
+            await anime_cimke.destroy({ where: { anime_id: id } });
 
-            await connection.query(query, [...values, id]);
-        }
-
-        // Update tags if provided
-        if (Array.isArray(cimkek)) {
-            // Remove existing tags
-            await connection.query('DELETE FROM anime_cimke WHERE anime_id = ?', [id]);
-
-            // Add new tags
-            for (const cimke of cimkek) {
-                await connection.query(
-                    `INSERT IGNORE INTO cimke_lista(cimke_nev) VALUES(?)`,
-                    [cimke]
-                );
-
-                const [tagRows] = await connection.query(
-                    `SELECT id FROM cimke_lista WHERE cimke_nev = ?`,
-                    [cimke]
-                );
-
-                await connection.query(
-                    `INSERT INTO anime_cimke(anime_id, cimke_id) VALUES(?, ?)`,
-                    [id, tagRows[0].id]
-                );
+            // Újak felvétele
+            for (const cimkeNev of cimkek) {
+                const [cimkeRecord] = await cimke_lista.findOrCreate({
+                    where: { cimke_nev: cimkeNev }
+                });
+                await anime_cimke.create({
+                    anime_id: id,
+                    cimke_id: cimkeRecord.id
+                });
             }
         }
 
-        // Update studios if provided
-        if (Array.isArray(studiok)) {
-            // Remove existing studios
-            await connection.query('DELETE FROM anime_studio WHERE anime_id = ?', [id]);
+        // 4. Stúdiók frissítése
+        if (studiok) {
+            await anime_studio.destroy({ where: { anime_id: id } });
 
-            // Add new studios
-            for (const studio of studiok) {
-                await connection.query(
-                    `INSERT IGNORE INTO studio_lista(studio_nev) VALUES(?)`,
-                    [studio]
-                );
-
-                const [studioRows] = await connection.query(
-                    `SELECT id FROM studio_lista WHERE studio_nev = ?`,
-                    [studio]
-                );
-
-                await connection.query(
-                    `INSERT INTO anime_studio(anime_id, studio_id) VALUES(?, ?)`,
-                    [id, studioRows[0].id]
-                );
+            for (const studioNev of studiok) {
+                const [studioRecord] = await studio_lista.findOrCreate({
+                    where: { studio_nev: studioNev }
+                });
+                await anime_studio.create({
+                    anime_id: id,
+                    studio_id: studioRecord.id
+                });
             }
         }
 
-        await connection.commit();
+        res.json({ success: true, message: "Anime adatai sikeresen frissítve!" });
 
-        res.json({
-            success: true,
-            data: {
-                message: 'Anime updated successfully'
-            }
-        });
     } catch (error) {
-        await connection.rollback();
-        console.error('Error updating anime:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to update anime',
-            details: error.message
-        });
-    } finally {
-        connection.release();
+        console.error("UPDATE Hiba:", error);
+        res.status(500).json({ success: false, error: error.message });
     }
 };
-
-// Delete anime (CASCADE will handle related records)
+/**
+ * @swagger
+ * /api/animes/{id}:
+ *   delete:
+ *     summary: Anime törlése
+ *     description: Eltávolít egy anime rekordot az adatbázisból azonosító alapján
+ *     tags: [Animes]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: A törlendő anime egyedi azonosítója
+ *         example: 1
+ *     responses:
+ *       200:
+ *         description: Anime sikeresen törölve
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Anime successfully deleted"
+ *                 id:
+ *                   type: integer
+ *                   example: 1
+ *       404:
+ *         description: Anime nem található
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Anime not found with id: 99"
+ *                 statusCode:
+ *                   type: integer
+ *                   example: 404
+ *       500:
+ *         description: Szerverhiba
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Internal server error"
+ */
 const deleteAnime = async (req, res) => {
     try {
-        const { id } = req.params;
-
-        const [result] = await pool.query(
-            'DELETE FROM anime_adatlap WHERE id = ?',
-            [id]
-        );
-
-        if (result.affectedRows === 0) {
-            return res.status(404).json({
-                success: false,
-                error: 'Anime not found'
-            });
-        }
-
-        res.json({
-            success: true,
-            data: {
-                message: 'Anime deleted successfully (including all related data)'
-            }
-        });
+        const result = await anime_adatlap.destroy({ where: { id: req.params.id } });
+        if (!result) return res.status(404).json({ success: false, error: 'Nem található' });
+        res.json({ success: true, message: 'Törölve' });
     } catch (error) {
-        console.error('Error deleting anime:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to delete anime',
-            details: error.message
-        });
+        res.status(500).json({ success: false, error: error.message });
     }
 };
 
-module.exports = {
-    getAllAnimes,
-    getAnimeById,
-    createAnime,
-    updateAnime,
-    deleteAnime
-};
+module.exports = { getAllAnimes, getAnimeById, createAnime, updateAnime, deleteAnime };

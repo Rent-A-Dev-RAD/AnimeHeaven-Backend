@@ -8,8 +8,7 @@ const {
     deleteAnime
 } = require('../controllers/animeController');
 
-// GET all animes (with optional filtering)
-// Query params: ?genre=Action&status=Ongoing&search=naruto&limit=50&offset=0
+// GET all animes
 router.get('/', getAllAnimes);
 
 // GET anime by ID
