@@ -92,7 +92,6 @@ app.use((req, res, next) => {
 });
 
 
-
 app.use('/api/animes', animeRoutes);
 app.use('/api/users', userRoutes);
 
