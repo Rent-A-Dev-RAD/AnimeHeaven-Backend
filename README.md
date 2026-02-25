@@ -4,7 +4,9 @@
 
 - Node.js + Express
 - MySQL (XAMPP)
-- CORS, dotenv
+- Sequelize ORM
+- Swagger UI (API dokumentáció)
+- CORS, dotenv, bcrypt
 
 ## Gyors Telepítés
 
@@ -54,18 +56,42 @@ npm start
 
 **Base URL:** `http://localhost:3001/api`
 
+**API Dokumentáció (Swagger UI):** `http://localhost:3001/swagger`
+
+### Health Check
 | Metódus | Végpont | Leírás |
 |---------|---------|--------|
-| GET | `/health` | Szerverállapot |
+| GET | `/health` | Szerverállapot és adatbázis kapcsolat |
+
+### Anime végpontok
+| Metódus | Végpont | Leírás |
+|---------|---------|--------|
 | GET | `/animes` | Összes anime listázása |
 | GET | `/animes/:id` | Egy anime adatai |
 | POST | `/animes` | Új anime létrehozása |
 | PUT | `/animes/:id` | Anime frissítése |
 | DELETE | `/animes/:id` | Anime törlése |
 
+### User végpontok
+| Metódus | Végpont | Leírás |
+|---------|---------|--------|
+| GET | `/users` | Összes felhasználó listázása |
+| GET | `/users/:id` | Egy felhasználó adatai |
+| POST | `/users` | Új felhasználó létrehozása |
+| PUT | `/users/:id` | Felhasználó frissítése |
+| DELETE | `/users/:id` | Felhasználó törlése |
+
+### Episode végpontok
+| Metódus | Végpont | Leírás |
+|---------|---------|--------|
+| GET | `/episodes/anime/:animeId` | Egy anime összes epizódja |
+
 ### Példák
 
 ```bash
+# Health check
+GET http://localhost:3001/api/health
+
 # Összes anime
 GET http://localhost:3001/api/animes
 
@@ -74,6 +100,18 @@ GET http://localhost:3001/api/animes?search=naruto
 
 # Egy anime
 GET http://localhost:3001/api/animes/1
+
+# Összes felhasználó
+GET http://localhost:3001/api/users
+
+# Egy felhasználó
+GET http://localhost:3001/api/users/1
+
+# Anime epizódjai
+GET http://localhost:3001/api/episodes/anime/1
+
+# Swagger UI dokumentáció
+http://localhost:3001/swagger
 ```
 
 ## Gyakori Hibák
@@ -95,6 +133,8 @@ taskkill /PID <PID> /F
 Böngészőben nyisd meg:
 - http://localhost:3001/api/health
 - http://localhost:3001/api/animes
+- http://localhost:3001/api/users
+- http://localhost:3001/swagger (Interaktív API dokumentáció)
 
 ---
 
