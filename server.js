@@ -9,6 +9,7 @@ const { sequelize } = require('./models');
 const animeRoutes = require('./routes/animeRoutes');
 const userRoutes = require('./routes/userRoutes');
 const episodeRoutes = require('./routes/episodeRoutes');
+const authRoutes = require('./routes/authRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -25,6 +26,13 @@ const swaggerOptions = {
         },
         servers: [{ url: `http://localhost:${PORT}` }],
         components: {
+            securitySchemes: {
+                bearerAuth: {
+                    type: 'http',
+                    scheme: 'bearer',
+                    bearerFormat: 'JWT'
+                }
+            },
             schemas: {
                 Error: {
                     type: 'object',
@@ -96,6 +104,7 @@ app.use((req, res, next) => {
 app.use('/api/animes', animeRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/episodes', episodeRoutes);
+app.use('/api/auth', authRoutes);
 
 // Error handlers
 app.use((req, res) => res.status(404).json({ success: false, error: 'Route not found' }));
