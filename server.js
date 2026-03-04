@@ -10,6 +10,8 @@ const animeRoutes = require('./routes/animeRoutes');
 const userRoutes = require('./routes/userRoutes');
 const episodeRoutes = require('./routes/episodeRoutes');
 const authRoutes = require('./routes/authRoutes');
+const profileRoutes = require('./routes/profileRoutes');
+const listRoutes = require('./routes/listRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -105,6 +107,8 @@ app.use('/api/animes', animeRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/episodes', episodeRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/profile', profileRoutes);
+app.use('/api/list', listRoutes);
 
 // Error handlers
 app.use((req, res) => res.status(404).json({ success: false, error: 'Route not found' }));
