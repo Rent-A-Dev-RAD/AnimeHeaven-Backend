@@ -53,45 +53,44 @@ const { sequelize, anime_adatlap, reszek, cimke_lista, studio_lista, anime_cimke
  */
 const getAllAnimes = async (req, res) => {
     try {
-        // Csak a lapozást hagyjuk meg, hogy ne omoljon össze a szerver 1 millió rekordnál
         const { limit = 50, offset = 0 } = req.query;
 
-        const animes = await anime_adatlap.findAll({
-            limit: parseInt(limit),
-            offset: parseInt(offset),
-            order: [['ertekeles', 'DESC']], // Legjobbak elöl
-            include: [
-                {
-                    model: anime_cimke,
-                    as: 'anime_cimkes',
-                    include: [{
-                        model: cimke_lista,
-                        as: 'cimke'
-                    }]
-                },
-                {
-                    model: anime_studio,
-                    as: 'anime_studios',
-                    include: [{
-                        model: studio_lista,
-                        as: 'studio'
-                    }]
-                }
-            ]
+        const query = `
+            SELECT 
+                a.*,
+                GROUP_CONCAT(DISTINCT s.studio_nev ORDER BY s.studio_nev SEPARATOR ', ') as studiok,
+                GROUP_CONCAT(DISTINCT c.cimke_nev ORDER BY c.cimke_nev SEPARATOR ', ') as cimkek
+            FROM anime_adatlap a
+            LEFT JOIN anime_studio ast ON a.id = ast.anime_id
+            LEFT JOIN studio_lista s ON ast.studio_id = s.id
+            LEFT JOIN anime_cimke ac ON a.id = ac.anime_id
+            LEFT JOIN cimke_lista c ON ac.cimke_id = c.id
+            WHERE a.lathatosag = 1
+            GROUP BY a.id
+            ORDER BY a.ertekeles DESC
+            LIMIT :limit OFFSET :offset
+        `;
+
+        const animes = await sequelize.query(query, {
+            replacements: {
+                limit: parseInt(limit),
+                offset: parseInt(offset)
+            },
+            type: sequelize.QueryTypes.SELECT
         });
 
-        res.json({ 
-            success: true, 
-            count: animes.length, 
-            data: animes 
+        res.json({
+            success: true,
+            count: animes.length,
+            data: animes
         });
 
     } catch (error) {
         console.error("Lekérdezési hiba:", error);
-        res.status(500).json({ 
-            success: false, 
+        res.status(500).json({
+            success: false,
             error: 'Hiba a lekérdezés során',
-            details: error.message 
+            details: error.message
         });
     }
 };
@@ -141,32 +140,30 @@ const getAllAnimes = async (req, res) => {
 const getAnimeById = async (req, res) => {
     try {
         const { id } = req.params;
-        const anime = await anime_adatlap.findByPk(id, {
-            include: [
-                {
-                    model: anime_cimke,
-                    as: 'anime_cimkes',
-                    include: [{
-                        model: cimke_lista,
-                        as: 'cimke'
-                    }]
-                },
-                {
-                    model: anime_studio,
-                    as: 'anime_studios',
-                    include: [{
-                        model: studio_lista,
-                        as: 'studio'
-                    }]
-                }
-            ]
+
+        const query = `
+            SELECT 
+                a.*,
+                GROUP_CONCAT(DISTINCT s.studio_nev ORDER BY s.studio_nev SEPARATOR ', ') as studiok,
+                GROUP_CONCAT(DISTINCT c.cimke_nev ORDER BY c.cimke_nev SEPARATOR ', ') as cimkek
+            FROM anime_adatlap a
+            LEFT JOIN anime_studio ast ON a.id = ast.anime_id
+            LEFT JOIN studio_lista s ON ast.studio_id = s.id
+            LEFT JOIN anime_cimke ac ON a.id = ac.anime_id
+            LEFT JOIN cimke_lista c ON ac.cimke_id = c.id
+            WHERE a.id = :id AND a.lathatosag = 1
+            GROUP BY a.id
+        `;
+        const result = await sequelize.query(query, {
+            replacements: { id },
+            type: sequelize.QueryTypes.SELECT
         });
 
-        if (!anime) {
+        if (!result || result.length === 0) {
             return res.status(404).json({ success: false, message: 'Anime nem található' });
         }
 
-        res.json({ success: true, data: anime });
+        res.json({ success: true, data: result[0] });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, error: error.message });
@@ -258,7 +255,7 @@ const createAnime = async (req, res) => {
                 const [cimkeRecord] = await cimke_lista.findOrCreate({
                     where: { cimke_nev: cimkeNev }
                 });
-                
+
                 // Manuálisan mentünk a KAPCSOLÓTÁBLÁBA
                 await anime_cimke.create({
                     anime_id: newAnime.id,
