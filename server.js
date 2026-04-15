@@ -138,8 +138,6 @@ const startServer = async () => {
         });
     } catch (error) {
         console.error('❌ Nem sikerült csatlakozni az adatbázishoz (xampp fut?):', error);
-        console.warn('⚠️  jajjj moretti hat nincs szerohoz csatlakozasom');
-
         // Elindítjuk a szervert DB nélkül is, hogy legalább az API hibaüzenetet tudjon adni
         app.listen(PORT, () => {
             console.log(`🚀 Server started but database is OFFLINE on port ${PORT}`);
